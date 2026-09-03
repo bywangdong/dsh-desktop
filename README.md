@@ -2,7 +2,7 @@
 
 DSH Desktop 是一个独立、轻量的 macOS 与 Windows 外壳，让 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 可以像普通应用一样打开。macOS 使用沉浸式窗口，不保留单独的标题栏占位，原生窗口按钮仅在鼠标移入左上角时显示；外壳不修改、复制或 fork 来源仓库的代码，运行内容始终来自 npm 官方包 `@deepseek-ai/dsh`。
 
-DSH 的 Web 界面直接显示在应用窗口中；支持该选项的运行时不会再额外打开系统浏览器，旧版运行时会自动使用兼容启动方式。
+DSH 的 Web 界面直接显示在应用窗口中；支持该选项的运行时不会再额外打开系统浏览器，旧版运行时会自动使用兼容启动方式。新版运行时的浏览器认证会在本机同源页面内完成，启动令牌不会写入 Desktop 日志。
 
 产品介绍与下载：[DSH Desktop 官网](https://iobee.github.io/dsh-desktop/)
 
@@ -106,7 +106,7 @@ gh run download <run-id> --name dsh-desktop-windows-x64 --dir dist-windows
 npm run release:publish -- --windows-installer "dist-windows/DSH Desktop_0.1.5_x64-setup.exe" "本次更新说明"
 ```
 
-该命令会在本机运行测试、准备最新 npm dsh、ad-hoc 签名 macOS 应用，并用同一把更新私钥为 macOS 更新包和 Windows 安装包签名。随后它生成同时包含 `darwin-aarch64` 与 `windows-x86_64` 的 `latest.json`，推送 `main` 和版本标签，并通过已登录的 `gh` 创建 GitHub Release。私钥全程留在本机，不会交给 GitHub Actions。只想验证完整打包链路而不推送时使用：
+该命令会在本机运行测试、强制刷新并准备 npm `latest` 的 dsh、ad-hoc 签名 macOS 应用，并用同一把更新私钥为 macOS 更新包和 Windows 安装包签名。随后它生成同时包含 `darwin-aarch64` 与 `windows-x86_64` 的 `latest.json`，推送 `main` 和版本标签，并通过已登录的 `gh` 创建 GitHub Release。私钥全程留在本机，不会交给 GitHub Actions。只想验证完整打包链路而不推送时使用：
 
 ```sh
 npm run release:publish -- --dry-run --windows-installer "dist-windows/DSH Desktop_0.1.5_x64-setup.exe"

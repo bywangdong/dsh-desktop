@@ -1,4 +1,5 @@
 mod app_updater;
+mod desktop_auth;
 mod runtime;
 mod terminal_command;
 #[cfg(target_os = "macos")]
@@ -221,7 +222,7 @@ fn uninstall_terminal_command(app: &tauri::AppHandle, runtime: Arc<RuntimeManage
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default().plugin(desktop_auth::plugin());
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(window_chrome::plugin());
     let builder = builder

@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import { desktopEntryUrl } from "./desktop-auth.ts";
+
 interface StartupInfo {
   url: string;
   dshVersion: string;
@@ -35,7 +37,7 @@ async function launch(): Promise<void> {
     window.clearTimeout(slowMessage);
     status.textContent = `DSH ${result.dshVersion} 已就绪`;
     hint.textContent = "正在打开…";
-    window.location.replace(result.url);
+    window.location.replace(desktopEntryUrl(result.url));
   } catch (reason) {
     window.clearTimeout(slowMessage);
     status.textContent = "启动失败";

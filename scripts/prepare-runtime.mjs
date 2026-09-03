@@ -20,6 +20,11 @@ const DSH_INSTALL_SCRIPTS = [
   "node-pty",
   "protobufjs",
 ];
+const arguments_ = process.argv.slice(2);
+if (arguments_.some((argument) => argument !== "--force")) {
+  throw new Error("Usage: npm run prepare:runtime -- [--force]");
+}
+const force = arguments_.includes("--force");
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const resources = join(root, "src-tauri", "resources");
 const nodeDir = join(resources, "node");
@@ -63,7 +68,8 @@ const expectedManifest = existsSync(manifestPath)
   ? JSON.parse(await readFile(manifestPath, "utf8"))
   : undefined;
 if (
-  expectedManifest?.nodeVersion === NODE_VERSION
+  !force
+  && expectedManifest?.nodeVersion === NODE_VERSION
   && expectedManifest?.npmVersion === NPM_VERSION
   && expectedManifest?.runtimeLayoutVersion === RUNTIME_LAYOUT_VERSION
   && expectedManifest?.platform === hostPlatform

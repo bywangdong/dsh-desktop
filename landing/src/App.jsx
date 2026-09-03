@@ -11,7 +11,7 @@ const links = {
   github: "https://github.com/iobee/dsh-desktop",
   docs: "https://github.com/iobee/dsh-desktop#使用方式",
   releases: "https://github.com/iobee/dsh-desktop/releases",
-  mac: "https://github.com/iobee/dsh-desktop/releases/download/v0.1.11/DSH.Desktop_0.1.11_aarch64.dmg",
+  mac: "https://github.com/iobee/dsh-desktop/releases/download/v0.1.12/DSH.Desktop_0.1.12_aarch64.dmg",
 };
 
 const assets = {
@@ -106,7 +106,7 @@ export function App() {
               <ArrowSquareOut aria-hidden="true" size={16} />
             </ExternalLink>
           </div>
-          <p className="release-meta">v0.1.11 · Apple Silicon · macOS 预览版</p>
+          <p className="release-meta">v0.1.12 · Apple Silicon · macOS 预览版</p>
 
         </section>
 

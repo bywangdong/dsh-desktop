@@ -751,9 +751,14 @@ impl RuntimeManager {
         let stderr_tail_writer = Arc::clone(&stderr_tail);
         thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                append_log(&output_log, &format!("stdout | {line}"));
                 if let Some(url) = parse_ready_url(&line) {
+                    append_log(
+                        &output_log,
+                        &format!("stdout | {}", loggable_runtime_stdout(&line)),
+                    );
                     let _ = ready_tx.send(url);
+                } else {
+                    append_log(&output_log, &format!("stdout | {line}"));
                 }
             }
         });
@@ -1232,6 +1237,14 @@ fn parse_ready_url(line: &str) -> Option<String> {
     }
 }
 
+fn loggable_runtime_stdout(line: &str) -> &str {
+    if parse_ready_url(line).is_some() {
+        "dsh web: [authenticated loopback URL]"
+    } else {
+        line
+    }
+}
+
 fn no_open_is_unsupported(error: &str) -> bool {
     error.contains("unknown option '--no-open'")
 }
@@ -1410,6 +1423,17 @@ mod tests {
         );
         assert_eq!(parse_ready_url("dsh web: http://0.0.0.0:43121"), None);
         assert_eq!(parse_ready_url("noise http://127.0.0.1:43121"), None);
+    }
+
+    #[test]
+    fn omits_authenticated_urls_from_runtime_logs() {
+        let ready = "dsh web: http://127.0.0.1:43121/?token=launch-secret";
+        assert_eq!(
+            loggable_runtime_stdout(ready),
+            "dsh web: [authenticated loopback URL]"
+        );
+        assert!(!loggable_runtime_stdout(ready).contains("launch-secret"));
+        assert_eq!(loggable_runtime_stdout("runtime detail"), "runtime detail");
     }
 
     #[test]

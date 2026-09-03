@@ -113,7 +113,7 @@ if (!dryRun) {
   }
 }
 
-run("npm", ["run", "prepare:runtime"]);
+run("npm", ["run", "prepare:runtime", "--", "--force"]);
 run("npm", ["run", "runtime:smoke"]);
 run("cargo", ["test", "--manifest-path", "src-tauri/Cargo.toml"]);
 run("npm", ["run", "desktop:build"]);
