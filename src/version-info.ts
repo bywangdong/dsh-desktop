@@ -34,6 +34,9 @@ export interface RuntimeSnapshot {
   npmVersion: string;
   updateChannel: RuntimeUpdateChannel;
   update: RuntimeUpdateSnapshot;
+  source: "local" | "managed" | null;
+  path: string | null;
+  pnpmVersion: string;
 }
 
 export interface AppUpdateSnapshot {
@@ -59,6 +62,9 @@ export const previewInfo: VersionInfo = {
     nodeVersion: "24.19.0",
     npmVersion: "11.19.0",
     updateChannel: "latest",
+    source: "managed",
+    path: null,
+    pnpmVersion: "11.7.0",
     update: {
       phase: "current",
       targetVersion: null,
@@ -73,7 +79,7 @@ export const previewInfo: VersionInfo = {
   },
 };
 
-/** Reads the current bundled and installed version state. */
+/** Reads the selected runtime and independent desktop update state. */
 export async function readVersionInfo(): Promise<VersionInfo> {
   return tauriRuntime ? invoke<VersionInfo>("get_about_info") : previewInfo;
 }

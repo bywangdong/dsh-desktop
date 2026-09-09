@@ -206,6 +206,10 @@ button {
   letter-spacing: -0.01em;
 }
 
+.component-name > div {
+  min-width: 0;
+}
+
 .component-name p,
 .status-detail {
   color: #838994;
@@ -215,7 +219,7 @@ button {
 
 .component-name p {
   margin: 4px 0 0;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .status-column {

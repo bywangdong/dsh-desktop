@@ -22,6 +22,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
+use crate::runtime_environment::{self as environment, Environment, RuntimeSource};
 use crate::terminal_command::{TerminalCommandInstall, TerminalCommandManager};
 
 const PACKAGE_NAME: &str = "@deepseek-ai/dsh";
@@ -55,14 +56,11 @@ pub struct StartupInfo {
     pub dsh_version: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct BundledManifest {
+#[derive(Clone, Debug)]
+struct SelectedVersions {
     node_version: String,
     npm_version: String,
     dsh_version: String,
-    platform: String,
-    arch: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -125,13 +123,16 @@ pub struct RuntimeSnapshot {
     pub npm_version: String,
     pub update_channel: RuntimeUpdateChannel,
     pub update: RuntimeUpdateSnapshot,
+    pub source: Option<RuntimeSource>,
+    pub path: Option<PathBuf>,
+    pub pnpm_version: String,
 }
 
 struct Paths {
     node: PathBuf,
     node_launcher: PathBuf,
     npm_cli: PathBuf,
-    bundled_runtime: PathBuf,
+    selected_runtime: PathBuf,
     runtimes: PathBuf,
     state: PathBuf,
     logs: PathBuf,
@@ -150,13 +151,23 @@ impl ManagedProcess {
     }
 
     fn terminate(&mut self) {
-        terminate_child(&mut self.child, self.process_id);
+        if self.process_id != 0 {
+            terminate_child(&mut self.child, self.process_id);
+            self.process_id = 0;
+        }
+    }
+}
+
+impl Drop for ManagedProcess {
+    fn drop(&mut self) {
+        self.terminate();
     }
 }
 
 pub struct RuntimeManager {
     paths: Paths,
-    manifest: BundledManifest,
+    tool_bin: PathBuf,
+    manifest: SelectedVersions,
     terminal_command: TerminalCommandManager,
     state: Mutex<RuntimeState>,
     process: Mutex<Option<ManagedProcess>>,
@@ -166,34 +177,27 @@ pub struct RuntimeManager {
     update_scheduled: AtomicBool,
     update_running: AtomicBool,
     shutting_down: AtomicBool,
+    environment: Environment,
 }
 
 impl RuntimeManager {
-    pub fn new(
+    pub fn from_environment(
         resource_dir: PathBuf,
         app_data_dir: PathBuf,
+        environment: Environment,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let resource_dir = node_compatible_path(&resource_dir);
         let app_data_dir = node_compatible_path(&app_data_dir);
-        let manifest_path = resolve_resource(&resource_dir, "runtime-manifest.json");
-        let manifest: BundledManifest =
-            serde_json::from_reader(File::open(&manifest_path).map_err(|error| {
-                format!(
-                    "cannot open bundled runtime manifest {}: {error}",
-                    manifest_path.display()
-                )
-            })?)?;
+        let manifest = SelectedVersions {
+            node_version: environment.node.version.clone(),
+            npm_version: environment
+                .npm
+                .as_ref()
+                .map(|tool| tool.version.clone())
+                .unwrap_or_else(|| "未安装".to_string()),
+            dsh_version: environment.dsh.version.clone(),
+        };
         Version::parse(&manifest.dsh_version)?;
-        let current_platform = node_platform_name(env::consts::OS);
-        let current_arch = node_arch_name(env::consts::ARCH);
-        if manifest.platform != current_platform || manifest.arch != current_arch {
-            return Err(format!(
-                "bundled runtime targets {}-{}, but this computer is {}-{}",
-                manifest.platform, manifest.arch, current_platform, current_arch
-            )
-            .into());
-        }
-
         let data_root = app_data_dir.join("runtime");
         let logs = app_data_dir.join("logs");
         fs::create_dir_all(data_root.join("versions"))?;
@@ -202,40 +206,55 @@ impl RuntimeManager {
         fs::create_dir_all(data_root.join("smoke"))?;
 
         let paths = Paths {
-            node: resolve_resource(&resource_dir, bundled_node_resource()),
+            node: environment.node.path.clone(),
             node_launcher: resolve_resource(&resource_dir, "node-launcher.mjs"),
-            npm_cli: resolve_resource(&resource_dir, "npm/node_modules/npm/bin/npm-cli.js"),
-            bundled_runtime: resolve_resource(&resource_dir, "bootstrap-runtime"),
+            npm_cli: environment
+                .npm
+                .as_ref()
+                .map(|tool| tool.path.clone())
+                .unwrap_or_default(),
+            selected_runtime: if environment.source == RuntimeSource::Managed {
+                environment
+                    .dsh
+                    .path
+                    .ancestors()
+                    .nth(5)
+                    .ok_or("managed DSH entry has no installation prefix")?
+                    .to_path_buf()
+            } else {
+                app_data_dir.join("runtime/unused-local-fallback")
+            },
             runtimes: data_root.join("versions"),
             state: data_root.join("state.json"),
             logs,
             npm_cache: data_root.join("npm-cache"),
             smoke: data_root.join("smoke"),
         };
-        for required in [
-            &paths.node,
-            &paths.node_launcher,
-            &paths.npm_cli,
-            &paths.bundled_runtime,
-        ] {
+        if environment.source == RuntimeSource::Managed
+            && !paths.selected_runtime.starts_with(&paths.runtimes)
+        {
+            return Err("managed DSH must stay inside the application's versions directory".into());
+        }
+        for required in [&paths.node, &paths.node_launcher] {
             if !required.exists() {
-                return Err(format!(
-                    "bundled runtime resource is missing: {}",
-                    required.display()
-                )
-                .into());
+                return Err(format!("runtime resource is missing: {}", required.display()).into());
             }
         }
 
+        let tool_bin = environment.create_tool_aliases(&app_data_dir)?;
         let state = read_state(&paths.state).unwrap_or_default();
         let terminal_command = TerminalCommandManager::new(
             &app_data_dir,
             paths.node.clone(),
-            paths.bundled_runtime.clone(),
+            paths.selected_runtime.clone(),
             paths.runtimes.clone(),
             paths.state.clone(),
+        )
+        .with_path_entries(
+            std::iter::once(tool_bin.clone())
+                .chain(env::split_paths(&environment.path(None)?))
+                .collect(),
         );
-        terminal_command.refresh_if_installed();
         let update_status = state
             .pending
             .as_ref()
@@ -248,12 +267,13 @@ impl RuntimeManager {
         append_log(
             &paths.logs.join("desktop.log"),
             &format!(
-                "DSH Desktop initialized (Node {}, npm {}, bundled dsh {})",
+                "DSH Desktop initialized (Node {}, npm {}, selected dsh {})",
                 manifest.node_version, manifest.npm_version, manifest.dsh_version
             ),
         );
         Ok(Self {
             paths,
+            tool_bin,
             manifest,
             terminal_command,
             state: Mutex::new(state),
@@ -264,6 +284,7 @@ impl RuntimeManager {
             update_scheduled: AtomicBool::new(false),
             update_running: AtomicBool::new(false),
             shutting_down: AtomicBool::new(false),
+            environment,
         })
     }
 
@@ -272,7 +293,7 @@ impl RuntimeManager {
             .start_gate
             .lock()
             .map_err(|_| "启动锁已损坏".to_string())?;
-        self.shutting_down.store(false, Ordering::Release);
+        environment::check_cancel(&self.shutting_down)?;
 
         {
             let mut process = self
@@ -291,6 +312,24 @@ impl RuntimeManager {
             } else {
                 process.take();
             }
+        }
+
+        if self.environment.source == RuntimeSource::Local {
+            let version = self.environment.dsh.version.clone();
+            let (process, url) = self.launch_at(&version, Path::new(""), None, START_TIMEOUT)?;
+            *self
+                .process
+                .lock()
+                .map_err(|_| "进程状态锁已损坏".to_string())? = Some(process);
+            let info = StartupInfo {
+                url,
+                dsh_version: version,
+            };
+            *self
+                .startup
+                .lock()
+                .map_err(|_| "启动状态锁已损坏".to_string())? = Some(info.clone());
+            return Ok(info);
         }
 
         let (candidates, pending) = {
@@ -357,6 +396,7 @@ impl RuntimeManager {
                         None,
                         Some("当前版本已就绪".to_string()),
                     );
+                    self.terminal_command.refresh_if_installed();
                     return Ok(info);
                 }
                 Err(error) => {
@@ -373,6 +413,9 @@ impl RuntimeManager {
     }
 
     pub fn schedule_update_check(self: &std::sync::Arc<Self>, app: tauri::AppHandle) {
+        if self.environment.source == RuntimeSource::Local {
+            return;
+        }
         if self.update_scheduled.swap(true, Ordering::AcqRel) {
             return;
         }
@@ -395,6 +438,14 @@ impl RuntimeManager {
         app: tauri::AppHandle,
         force: bool,
     ) -> bool {
+        if self.environment.source == RuntimeSource::Local {
+            self.set_update_status(
+                RuntimeUpdatePhase::Idle,
+                None,
+                Some("本机安装由原安装方式更新；DSH Desktop 不会替换它。".to_string()),
+            );
+            return false;
+        }
         let channel = match self.state.lock() {
             Ok(state) => {
                 if !force && !update_check_is_due(&state, unix_time(), force) {
@@ -482,6 +533,9 @@ impl RuntimeManager {
     }
 
     pub fn set_update_channel(&self, channel: RuntimeUpdateChannel) -> Result<bool, String> {
+        if self.environment.source == RuntimeSource::Local {
+            return Err("本机安装请使用原来的方式选择版本和更新。".to_string());
+        }
         if self.update_running.load(Ordering::Acquire) {
             return Err("DSH 更新正在进行，请完成后再切换通道。".to_string());
         }
@@ -514,6 +568,23 @@ impl RuntimeManager {
     }
 
     pub fn snapshot(&self) -> RuntimeSnapshot {
+        if self.environment.source == RuntimeSource::Local {
+            return RuntimeSnapshot {
+                current_version: self.environment.dsh.version.clone(),
+                pending_version: None,
+                node_version: self.environment.node.version.clone(),
+                npm_version: self.manifest.npm_version.clone(),
+                update_channel: RuntimeUpdateChannel::Latest,
+                update: RuntimeUpdateSnapshot {
+                    phase: RuntimeUpdatePhase::Idle,
+                    target_version: None,
+                    detail: Some("使用本机安装，请通过原安装方式更新。".to_string()),
+                },
+                source: Some(RuntimeSource::Local),
+                path: Some(self.environment.dsh.path.clone()),
+                pnpm_version: self.environment.pnpm.version.clone(),
+            };
+        }
         let (current_version, pending_version, update_channel) = self
             .state
             .lock()
@@ -558,7 +629,24 @@ impl RuntimeManager {
             npm_version: self.manifest.npm_version.clone(),
             update_channel,
             update,
+            source: Some(self.environment.source),
+            path: self
+                .state
+                .lock()
+                .ok()
+                .and_then(|state| {
+                    state
+                        .active
+                        .as_deref()
+                        .and_then(|version| self.runtime_path(version))
+                })
+                .map(|path| runtime_cli(&path)),
+            pnpm_version: self.environment.pnpm.version.clone(),
         }
+    }
+
+    pub fn has_started(&self) -> bool {
+        self.startup.lock().is_ok_and(|startup| startup.is_some())
     }
 
     pub fn terminate(&self) {
@@ -573,25 +661,14 @@ impl RuntimeManager {
         }
     }
 
-    pub fn open_logs(&self) -> Result<(), String> {
-        let mut command = Command::new(log_directory_opener());
-        configure_background_command(&mut command);
-        command
-            .arg(&self.paths.logs)
-            .spawn()
-            .map_err(|error| format!("无法打开日志目录：{error}"))?;
-        Ok(())
-    }
-
     pub fn install_terminal_command(&self) -> Result<TerminalCommandInstall, String> {
+        if self.environment.source == RuntimeSource::Local {
+            return Err("当前正在复用本机 DSH，无需再安装桌面端终端命令。".to_string());
+        }
         self.terminal_command.install()
     }
 
-    pub fn uninstall_terminal_command(&self) -> Result<String, String> {
-        self.terminal_command.uninstall()
-    }
-
-    pub fn smoke_bundled_runtime(&self) -> Result<StartupInfo, String> {
+    pub fn smoke_runtime(&self) -> Result<StartupInfo, String> {
         let smoke_home =
             self.paths
                 .smoke
@@ -600,7 +677,7 @@ impl RuntimeManager {
             .map_err(|error| format!("无法创建安装包冒烟测试目录：{error}"))?;
         let result = self.launch_at(
             &self.manifest.dsh_version,
-            &self.paths.bundled_runtime,
+            &self.paths.selected_runtime,
             Some(&smoke_home),
             START_TIMEOUT,
         );
@@ -675,9 +752,9 @@ impl RuntimeManager {
         if runtime_cli(&installed).is_file() {
             Some(installed)
         } else if version == self.manifest.dsh_version
-            && runtime_cli(&self.paths.bundled_runtime).is_file()
+            && runtime_cli(&self.paths.selected_runtime).is_file()
         {
-            Some(self.paths.bundled_runtime.clone())
+            Some(self.paths.selected_runtime.clone())
         } else {
             None
         }
@@ -714,15 +791,34 @@ impl RuntimeManager {
         timeout: Duration,
         suppress_browser: bool,
     ) -> Result<(ManagedProcess, String), String> {
-        let cli = runtime_cli(runtime_path);
-        let mut command = self.node_entry_command(&cli, &user_home())?;
-        let child_path = runtime_path_env(&self.paths.node, runtime_path)?;
+        let local = self.environment.source == RuntimeSource::Local;
+        let cli = if local {
+            self.environment.dsh.path.clone()
+        } else {
+            runtime_cli(runtime_path)
+        };
+        let mut command = if local
+            && !cli
+                .extension()
+                .is_some_and(|ext| ext == "js" || ext == "cjs" || ext == "mjs")
+        {
+            environment::command(
+                &self.environment.dsh,
+                Some(&self.environment.node),
+                &self.environment.search_path,
+            )?
+        } else {
+            self.node_entry_command(&cli, &user_home())?
+        };
+        let child_path = self.child_path(if local { None } else { Some(runtime_path) })?;
         command
             .args(WEB_COMMAND_ARGS)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .env("NODE_ENV", "production")
             .env("DSH_DESKTOP", "1")
+            .env("COREPACK_ENABLE_NETWORK", "0")
+            .env("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0")
             .env("PATH", child_path);
         if suppress_browser {
             command.arg(NO_OPEN_ARGUMENT);
@@ -762,23 +858,25 @@ impl RuntimeManager {
                 }
             }
         });
-        let mut stderr_thread = Some(thread::spawn(move || {
+        thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                 remember_stderr_line(&stderr_tail_writer, &line);
                 append_log(&error_log, &format!("stderr | {line}"));
             }
-        }));
+        });
 
         let deadline = Instant::now() + timeout;
         loop {
+            if self.shutting_down.load(Ordering::Acquire) {
+                terminate_child(&mut child, process_id);
+                return Err(environment::CANCELLED.to_string());
+            }
             if let Ok(url) = ready_rx.try_recv() {
                 return Ok((ManagedProcess { child, process_id }, url));
             }
             match child.try_wait() {
                 Ok(Some(status)) => {
-                    if let Some(handle) = stderr_thread.take() {
-                        let _ = handle.join();
-                    }
+                    terminate_child(&mut child, process_id);
                     return Err(with_stderr_tail(
                         format!("进程在就绪前退出（{status}）"),
                         &stderr_tail,
@@ -786,6 +884,7 @@ impl RuntimeManager {
                 }
                 Ok(None) => {}
                 Err(error) => {
+                    terminate_child(&mut child, process_id);
                     return Err(with_stderr_tail(
                         format!("无法读取进程状态：{error}"),
                         &stderr_tail,
@@ -794,9 +893,6 @@ impl RuntimeManager {
             }
             if Instant::now() >= deadline {
                 terminate_child(&mut child, process_id);
-                if let Some(handle) = stderr_thread.take() {
-                    let _ = handle.join();
-                }
                 return Err(with_stderr_tail(
                     format!("{timeout:?} 内没有收到就绪信号"),
                     &stderr_tail,
@@ -823,7 +919,46 @@ impl RuntimeManager {
             .current_dir(launcher_dir)
             .env(NODE_ENTRY_ENV, node_compatible_path(entry))
             .env(NODE_CWD_ENV, node_compatible_path(cwd))
-            .env("PATH", node_path_env(&self.paths.node)?);
+            .env("PATH", self.child_path(None)?);
+        Ok(command)
+    }
+
+    fn child_path(&self, runtime: Option<&Path>) -> Result<std::ffi::OsString, String> {
+        let mut paths = vec![self.tool_bin.clone()];
+        paths.extend(env::split_paths(&self.environment.path(runtime)?));
+        environment::join_path(&paths)
+    }
+
+    fn npm_command(&self, cwd: &Path) -> Result<Command, String> {
+        let npm = self
+            .environment
+            .npm
+            .as_ref()
+            .filter(|tool| environment::npm_can_install(tool))
+            .ok_or_else(|| "安装工具需要准备或修复，请打开“运行环境…”后重试。".to_string())?;
+        let mut command = if self
+            .paths
+            .npm_cli
+            .extension()
+            .is_some_and(|ext| ext == "js" || ext == "mjs" || ext == "cjs")
+        {
+            self.node_entry_command(&self.paths.npm_cli, cwd)?
+        } else {
+            environment::command(
+                npm,
+                Some(&self.environment.node),
+                &self.environment.search_path,
+            )?
+        };
+        if !self
+            .paths
+            .npm_cli
+            .extension()
+            .is_some_and(|ext| ext == "js" || ext == "mjs" || ext == "cjs")
+        {
+            command.current_dir(cwd);
+        }
+        command.env("PATH", self.child_path(None)?);
         Ok(command)
     }
 
@@ -848,15 +983,15 @@ impl RuntimeManager {
             self.save_state(&state)?;
         }
 
-        let mut command = self.node_entry_command(&self.paths.npm_cli, &self.paths.npm_cache)?;
+        let mut command = self.npm_command(&self.paths.npm_cache)?;
         configure_background_command(&mut command);
         let selector = format!("dist-tags.{}", channel.dist_tag());
-        let output = command
+        command
             .args(["view", PACKAGE_NAME, selector.as_str(), "--json"])
             .env("npm_config_cache", &self.paths.npm_cache)
-            .env("npm_config_update_notifier", "false")
-            .output()
-            .map_err(|error| format!("无法执行 npm view：{error}"))?;
+            .env("npm_config_update_notifier", "false");
+        let output =
+            environment::run_output(&mut command, Duration::from_secs(60), &self.shutting_down)?;
         if !output.status.success() {
             return Err(format!(
                 "npm view 失败：{}",
@@ -920,15 +1055,20 @@ impl RuntimeManager {
         Ok(UpdateOutcome::Staged(candidate))
     }
 
-    fn install_and_verify(&self, version: &str, destination: &Path) -> Result<(), String> {
-        let stage = self
-            .paths
-            .runtimes
-            .join(format!(".staging-{version}-{}", unix_time()));
-        if stage.exists() {
-            fs::remove_dir_all(&stage).map_err(|error| format!("无法清理更新暂存目录：{error}"))?;
+    pub(crate) fn install_and_verify(
+        &self,
+        version: &str,
+        destination: &Path,
+    ) -> Result<(), String> {
+        Version::parse(version).map_err(|error| error.to_string())?;
+        if destination != self.paths.runtimes.join(version) {
+            return Err("安装目标不属于应用的版本目录。".to_string());
         }
-        fs::create_dir_all(&stage).map_err(|error| format!("无法创建更新暂存目录：{error}"))?;
+        let temporary = tempfile::Builder::new()
+            .prefix(".staging-")
+            .tempdir_in(&self.paths.runtimes)
+            .map_err(|error| error.to_string())?;
+        let stage = temporary.path().to_path_buf();
         let package_json = update_package_manifest(version);
         fs::write(
             stage.join("package.json"),
@@ -940,9 +1080,9 @@ impl RuntimeManager {
             &self.desktop_log(),
             &format!("installing {PACKAGE_NAME}@{version}"),
         );
-        let mut install_command = self.node_entry_command(&self.paths.npm_cli, &stage)?;
+        let mut install_command = self.npm_command(&stage)?;
         configure_background_command(&mut install_command);
-        let output = install_command
+        install_command
             .args([
                 "install",
                 "--omit=dev",
@@ -950,12 +1090,19 @@ impl RuntimeManager {
                 "--no-audit",
                 "--no-fund",
                 "--package-lock=false",
+                "--global=false",
+                "--prefix=.",
+                "--registry=https://registry.npmjs.org",
+                "--engine-strict=true",
             ])
             .env("npm_config_cache", &self.paths.npm_cache)
             .env("npm_config_update_notifier", "false")
-            .env("npm_config_strict_allow_scripts", "true")
-            .output()
-            .map_err(|error| format!("无法执行 npm install：{error}"))?;
+            .env("npm_config_strict_allow_scripts", "true");
+        let output = environment::run_output(
+            &mut install_command,
+            Duration::from_secs(900),
+            &self.shutting_down,
+        )?;
         append_log(
             &self.runtime_log(),
             &format!(
@@ -976,10 +1123,12 @@ impl RuntimeManager {
         );
         let mut version_command = self.node_entry_command(&runtime_cli(&stage), &stage)?;
         configure_background_command(&mut version_command);
-        let version_output = version_command
-            .arg("--version")
-            .output()
-            .map_err(|error| format!("无法验证新版本：{error}"))?;
+        version_command.arg("--version");
+        let version_output = environment::run_output(
+            &mut version_command,
+            environment::PROBE_TIMEOUT,
+            &self.shutting_down,
+        )?;
         let reported = String::from_utf8_lossy(&version_output.stdout)
             .trim()
             .to_string();
@@ -1003,21 +1152,20 @@ impl RuntimeManager {
         let _ = fs::remove_dir_all(&smoke_home);
         prune_other_platforms(&stage);
 
+        environment::check_cancel(&self.shutting_down)?;
         if destination.exists() {
-            fs::remove_dir_all(destination)
-                .map_err(|error| format!("无法替换损坏的版本目录：{error}"))?;
+            fs::rename(
+                destination,
+                destination.with_extension(format!("replaced-{}", unix_time())),
+            )
+            .map_err(|error| format!("无法保留旧版本目录：{error}"))?;
         }
         fs::rename(&stage, destination).map_err(|error| format!("无法提交新版本：{error}"))?;
         Ok(())
     }
 
     fn save_state(&self, state: &RuntimeState) -> Result<(), String> {
-        let temporary = self.paths.state.with_extension("json.tmp");
-        let bytes = serde_json::to_vec_pretty(state)
-            .map_err(|error| format!("无法编码版本状态：{error}"))?;
-        fs::write(&temporary, bytes).map_err(|error| format!("无法写入版本状态：{error}"))?;
-        fs::rename(&temporary, &self.paths.state)
-            .map_err(|error| format!("无法提交版本状态：{error}"))
+        environment::write_json(&self.paths.state, state)
     }
 
     fn desktop_log(&self) -> PathBuf {
@@ -1088,7 +1236,7 @@ fn resolve_resource(root: &Path, relative: &str) -> PathBuf {
     }
 }
 
-fn node_compatible_path(path: &Path) -> PathBuf {
+pub(crate) fn node_compatible_path(path: &Path) -> PathBuf {
     #[cfg(windows)]
     {
         dunce::simplified(path).to_path_buf()
@@ -1099,24 +1247,6 @@ fn node_compatible_path(path: &Path) -> PathBuf {
     }
 }
 
-fn bundled_node_resource() -> &'static str {
-    if cfg!(windows) {
-        "node/node.exe"
-    } else {
-        "node/bin/node"
-    }
-}
-
-fn log_directory_opener() -> &'static str {
-    if cfg!(windows) {
-        "explorer.exe"
-    } else if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    }
-}
-
 fn configure_background_command(command: &mut Command) {
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
@@ -1124,50 +1254,15 @@ fn configure_background_command(command: &mut Command) {
     let _ = command;
 }
 
-fn configure_managed_command(command: &mut Command) {
+pub(crate) fn configure_managed_command(command: &mut Command) {
     #[cfg(unix)]
     command.process_group(0);
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
 }
 
-fn runtime_cli(runtime: &Path) -> PathBuf {
+pub(crate) fn runtime_cli(runtime: &Path) -> PathBuf {
     runtime.join("node_modules/@deepseek-ai/dsh/lib/bin.js")
-}
-
-fn node_path_env(node: &Path) -> Result<std::ffi::OsString, String> {
-    prefixed_path_env([node
-        .parent()
-        .ok_or_else(|| format!("捆绑的 Node 路径没有父目录：{}", node.display()))?
-        .to_path_buf()])
-}
-
-fn runtime_path_env(node: &Path, runtime: &Path) -> Result<std::ffi::OsString, String> {
-    prefixed_path_env([
-        node.parent()
-            .ok_or_else(|| format!("捆绑的 Node 路径没有父目录：{}", node.display()))?
-            .to_path_buf(),
-        runtime.join("node_modules/.bin"),
-    ])
-}
-
-fn prefixed_path_env(
-    prefixes: impl IntoIterator<Item = PathBuf>,
-) -> Result<std::ffi::OsString, String> {
-    prefixed_path_env_with(prefixes, env::var_os("PATH"))
-}
-
-fn prefixed_path_env_with(
-    prefixes: impl IntoIterator<Item = PathBuf>,
-    inherited: Option<std::ffi::OsString>,
-) -> Result<std::ffi::OsString, String> {
-    let mut path = env::join_paths(prefixes)
-        .map_err(|error| format!("无法为捆绑的 Node 构造 PATH：{error}"))?;
-    if let Some(existing) = inherited.filter(|value| !value.is_empty()) {
-        path.push(if cfg!(windows) { ";" } else { ":" });
-        path.push(existing);
-    }
-    Ok(path)
 }
 
 fn user_home() -> PathBuf {
@@ -1350,14 +1445,16 @@ fn launch_candidates(state: &RuntimeState, bundled: &str) -> Vec<String> {
 }
 
 #[cfg(unix)]
-fn terminate_child(child: &mut Child, process_id: u32) {
+pub(crate) fn terminate_child(child: &mut Child, process_id: u32) {
     let process_group = process_id as i32;
     unsafe {
         libc::kill(-process_group, libc::SIGTERM);
     }
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
-        if matches!(child.try_wait(), Ok(Some(_))) {
+        let exited = matches!(child.try_wait(), Ok(Some(_)));
+        let group_exists = unsafe { libc::kill(-process_group, 0) == 0 };
+        if exited && !group_exists {
             return;
         }
         thread::sleep(Duration::from_millis(100));
@@ -1369,7 +1466,7 @@ fn terminate_child(child: &mut Child, process_id: u32) {
 }
 
 #[cfg(windows)]
-fn terminate_child(child: &mut Child, process_id: u32) {
+pub(crate) fn terminate_child(child: &mut Child, process_id: u32) {
     let mut terminate = Command::new("taskkill.exe");
     configure_background_command(&mut terminate);
     let _ = terminate
@@ -1415,6 +1512,87 @@ fn prune_other_platforms(runtime: &Path) {
 mod tests {
     use super::*;
 
+    fn test_node() -> PathBuf {
+        let output = Command::new("node")
+            .args(["-p", "process.execPath"])
+            .output()
+            .expect("build-host Node is required for runtime subprocess tests");
+        assert!(output.status.success());
+        node_compatible_path(&PathBuf::from(
+            String::from_utf8_lossy(&output.stdout).trim(),
+        ))
+    }
+
+    fn test_manager(resources: PathBuf, app_data: PathBuf, runtime: &Path) -> RuntimeManager {
+        let node = test_node();
+        let tool = environment::Tool {
+            path: node.clone(),
+            bin_dir: node.parent().unwrap().to_path_buf(),
+            version: "24.19.0".into(),
+        };
+        RuntimeManager::from_environment(
+            resources,
+            app_data,
+            Environment {
+                source: RuntimeSource::Managed,
+                node: tool.clone(),
+                npm: None,
+                pnpm: tool,
+                dsh: environment::Tool {
+                    path: runtime_cli(runtime),
+                    bin_dir: runtime.join("node_modules/.bin"),
+                    version: "1.0.0".into(),
+                },
+                search_path: env::var_os("PATH")
+                    .map(|path| env::split_paths(&path).collect())
+                    .unwrap_or_default(),
+            },
+        )
+        .expect("initialize runtime fixture")
+    }
+
+    #[test]
+    fn user_runtime_is_not_owned_by_the_managed_updater() {
+        let temp = tempfile::tempdir().unwrap();
+        let app_data = temp.path().join("app");
+        let node = test_node();
+        let tool = environment::Tool {
+            path: node.clone(),
+            bin_dir: node.parent().unwrap().to_path_buf(),
+            version: "24.19.0".into(),
+        };
+        let user_entry = temp.path().join("user-dsh.mjs");
+        fs::write(&user_entry, "console.log('1.2.3')").unwrap();
+        let manager = RuntimeManager::from_environment(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources"),
+            app_data.clone(),
+            Environment {
+                source: RuntimeSource::Local,
+                node: tool.clone(),
+                npm: None,
+                pnpm: tool,
+                dsh: environment::Tool {
+                    path: user_entry.clone(),
+                    bin_dir: temp.path().to_path_buf(),
+                    version: "1.2.3".into(),
+                },
+                search_path: vec![],
+            },
+        )
+        .unwrap();
+        assert!(manager
+            .set_update_channel(RuntimeUpdateChannel::Next)
+            .is_err());
+        assert!(manager.install_terminal_command().is_err());
+        assert_eq!(manager.snapshot().source, Some(RuntimeSource::Local));
+        assert!(manager.snapshot().pending_version.is_none());
+        assert!(!app_data.join("runtime/state.json").exists());
+        assert_eq!(
+            fs::read_to_string(user_entry).unwrap(),
+            "console.log('1.2.3')"
+        );
+    }
+
     #[test]
     fn extracts_only_loopback_readiness_lines() {
         assert_eq!(
@@ -1451,7 +1629,7 @@ mod tests {
             std::process::id(),
             unix_time()
         ));
-        let runtime = app_data.join("legacy-runtime");
+        let runtime = app_data.join("runtime/versions/1.0.0");
         let cli = runtime_cli(&runtime);
         fs::create_dir_all(cli.parent().expect("legacy CLI parent"))
             .expect("create legacy CLI directory");
@@ -1467,8 +1645,7 @@ setInterval(() => {}, 1000);
 "#,
         )
         .expect("write legacy CLI");
-        let manager = RuntimeManager::new(resources, app_data.clone())
-            .expect("initialize legacy runtime test manager");
+        let manager = test_manager(resources, app_data.clone(), &runtime);
         let dsh_home = app_data.join("dsh-home");
         fs::create_dir_all(&dsh_home).expect("create legacy DSH home");
 
@@ -1599,21 +1776,18 @@ setInterval(() => {}, 1000);
 
     #[cfg(unix)]
     #[test]
-    fn exposes_bundled_node_to_lifecycle_scripts_without_a_system_node() {
-        let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
-        let node = resources.join("node/bin/node");
-        assert!(node.is_file(), "prepared bundled Node is missing");
+    fn exposes_selected_node_to_lifecycle_scripts_without_a_system_node() {
+        let node = test_node();
         let empty_host_path = env::temp_dir().join(format!(
             "dsh-desktop-empty-path-{}-{}",
             std::process::id(),
             unix_time()
         ));
         fs::create_dir_all(&empty_host_path).expect("create empty host PATH directory");
-        let inherited = env::join_paths([&empty_host_path]).expect("construct empty host PATH");
-        let path = prefixed_path_env_with(
-            [node.parent().expect("bundled Node parent").to_path_buf()],
-            Some(inherited),
-        )
+        let path = environment::join_path(&[
+            node.parent().expect("selected Node parent").to_path_buf(),
+            empty_host_path.clone(),
+        ])
         .expect("construct lifecycle PATH");
 
         let output = Command::new("/bin/sh")
@@ -1631,7 +1805,7 @@ setInterval(() => {}, 1000);
         let reported = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
         assert_eq!(
             fs::canonicalize(reported).expect("canonicalize reported Node"),
-            fs::canonicalize(node).expect("canonicalize bundled Node")
+            fs::canonicalize(node).expect("canonicalize selected Node")
         );
     }
 
@@ -1663,10 +1837,10 @@ setInterval(() => {}, 1000);
 
     #[cfg(windows)]
     #[test]
-    fn launches_bundled_dsh_from_a_tauri_verbatim_resource_path() {
+    fn launches_managed_js_from_a_tauri_verbatim_resource_path() {
         let resource_dir =
             fs::canonicalize(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources"))
-                .expect("canonicalize prepared resources");
+                .expect("canonicalize launcher resources");
         assert!(resource_dir.to_string_lossy().starts_with(r"\\?\"));
 
         let app_data = env::temp_dir().join(format!(
@@ -1676,16 +1850,23 @@ setInterval(() => {}, 1000);
         ));
         fs::create_dir_all(&app_data).expect("create temporary app data");
         let app_data = fs::canonicalize(&app_data).expect("canonicalize temporary app data");
-        let manager = RuntimeManager::new(resource_dir, app_data.clone())
-            .expect("initialize runtime from verbatim paths");
+        let runtime = node_compatible_path(&app_data).join("runtime/versions/1.0.0");
+        let cli = runtime_cli(&runtime);
+        fs::create_dir_all(cli.parent().unwrap()).unwrap();
+        fs::write(
+            &cli,
+            "console.log('dsh web: http://127.0.0.1:43123'); setInterval(() => {}, 1000);\n",
+        )
+        .unwrap();
+        let manager = test_manager(resource_dir, app_data.clone(), &runtime);
         let version = manager.manifest.dsh_version.clone();
-        let runtime = manager.paths.bundled_runtime.clone();
+        let runtime = manager.paths.selected_runtime.clone();
         let dsh_home = manager.paths.smoke.join("launch-test");
         fs::create_dir_all(&dsh_home).expect("create temporary dsh home");
 
         let (mut process, url) = manager
             .launch_at(&version, &runtime, Some(&dsh_home), START_TIMEOUT)
-            .expect("launch bundled dsh");
+            .expect("launch managed runtime fixture");
         assert!(url.starts_with("http://127.0.0.1:"));
         process.terminate();
         let _ = fs::remove_dir_all(app_data);

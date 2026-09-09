@@ -17,7 +17,7 @@ DSH 的 Web 界面直接显示在应用窗口中；支持该选项的运行时�
    xattr -dr com.apple.quarantine "/Applications/DSH Desktop.app"
    ```
 
-3. 再正常打开应用。Node、npm 和首个可用 DSH 版本都已包含在 App 中，无需预装开发环境。
+3. 再正常打开应用。应用会先检测本机环境；已有兼容安装就直接进入，否则显示准备页。
 
 也可以先尝试打开一次，然后到“系统设置 → 隐私与安全性”选择“仍要打开”。不要全局关闭 Gatekeeper。
 
@@ -25,7 +25,23 @@ DSH 的 Web 界面直接显示在应用窗口中；支持该选项的运行时�
 
 1. 下载并运行 `DSH.Desktop_<版本>_x64-setup.exe`。安装只写入当前用户目录，不需要管理员权限。
 2. 当前构建没有 Authenticode 证书。若 SmartScreen 拦截，选择“更多信息”→“仍要运行”。
-3. Node、npm 和首个可用 DSH 版本都已包含在安装包中，无需预装开发环境。
+3. 应用会先检测本机环境；没有开发环境也可以通过准备页下载所需组件。
+
+### 第一次打开与运行环境
+
+安装包不包含 Node、npm、pnpm 或 DSH。启动检测只读取本机环境，不会自动下载、修改全局 PATH，或覆盖用户安装。macOS 检测登录 shell 的 PATH，并识别常见安装目录；DSH Desktop 自己创建的终端命令不会被当成本机 DSH。
+
+- 已有兼容的 Node、pnpm 和 DSH：直接使用并记住安装位置。Node 支持 22.19 及以上的 22.x 或 24 及以上稳定版本；工具还必须能通过实际执行检查。
+- 缺少组件：点击“下载并开始”才联网准备，只补齐缺失或不兼容的组件。兼容的本机 Node 和 pnpm 可以搭配应用管理的 DSH。
+- 自己安装或指定位置：点击“使用已有安装…”，可重新检测、输入绝对路径或使用文件选择器。缺少插件安装所需的组件时，会先说明再补齐。
+- 下载可以取消和重试；临时安装通过版本与启动检查后才会提交。已完成的组件会保留供重试使用，原来的运行环境不会被移动或覆盖。
+- “DSH Desktop → 运行环境…”可以更换来源，明确保存后才重启。已保存的安装失效时会提示修复，不会悄悄切换到另一套环境。
+
+首次启动使用居中的内容区；“运行环境”使用紧凑的独立窗口，集中显示当前版本和来源，组件路径按需展开。取消选择会返回当前安装，不改变已保存的来源。
+
+应用下载的组件位于自己的用户数据目录下的 `runtime/toolchains/`，DSH 位于 `runtime/versions/`，不要求安装到 `~/.local`，也不需要管理员权限。当前缺省下载版本为 Node 24.19.0、npm 11.19.0 和 pnpm 11.7.0；Node 使用官方发行包并校验 SHA-256，npm/pnpm 使用 npm 官方包并校验固定 SHA-512。DSH 由 npm 下载官方包并进行完整性校验，安装脚本采用明确的许可列表。
+
+首次补齐组件需要网络；环境准备好后，启动不等待网络。应用只管理自己下载的文件，不升级或卸载用户已有的 Node、pnpm、npm 或 DSH。
 
 ## 两条更新通道
 
@@ -33,12 +49,14 @@ DSH 的 Web 界面直接显示在应用窗口中；支持该选项的运行时�
 
 ### DSH 运行时
 
+使用本机 DSH 时，版本由原来的安装方式管理；更新窗口会标注“本机安装 · 自行管理”，不会安装另一份 DSH 替换它。以下更新流程只适用于应用管理的 DSH：
+
 - 启动只读取本机当前版本，不等待网络。
 - 默认跟随 npm `dist-tags.latest`；“检查更新”窗口可开启“加入 DSH Beta”，改为跟随预发布的 `dist-tags.next`。
 - 切换通道后立即检查一次；此后的手动检查与每 12 小时后台检查都使用所选通道。
 - 退出 Beta 会取消尚未应用的 Beta 更新，但不会把当前正在运行的较新 DSH 自动降级；Desktop 会等 `latest` 追平后再更新。
 - 界面打开 60 秒后开始首次后台检查；应用持续运行时也会按该周期继续检查。
-- 新版本会安装到独立的版本目录，使用捆绑的 Node/npm 验证版本并完成一次启动冒烟测试。
+- 新版本会安装到独立的版本目录，使用已选择的 Node 和兼容安装工具验证版本并完成一次启动冒烟测试。
 - 正在运行的版本不会被替换；新版本在下次启动时切换。
 - 若新版本启动失败，应用自动退回上一版本。网络或安装失败也不会影响当前版本。
 - “DSH Desktop → 检查更新…”可随时强制检查，不受 12 小时间隔或失败重试间隔限制；“重新启动”可应用已就绪的更新。
@@ -55,7 +73,7 @@ Windows 与 macOS 使用同一份签名更新清单；应用只会下载与当�
 
 ## 可选终端命令
 
-默认情况下，DSH Desktop 不修改用户 PATH，也不影响终端里已有的 `dsh`。需要在终端复用桌面应用管理的同一套 DSH 时，可选择“DSH Desktop → 安装终端命令…”：
+默认情况下，DSH Desktop 不修改用户 PATH，也不影响终端里已有的 `dsh`。使用本机 DSH 时继续使用原来的终端命令即可。使用应用管理的 DSH 时，可选择“DSH Desktop → 安装终端命令…”：
 
 - 若终端中没有 `dsh`，安装名为 `dsh` 的轻量启动命令。
 - 若检测到已有 `dsh`，改为安装 `dsh-desktop`，不覆盖、不移动，也不改变原命令的优先级。
@@ -76,9 +94,20 @@ npm ci
 npm run desktop:build
 ```
 
-`prepare:runtime` 会按构建主机下载 Node 24.19.0 LTS 的官方 macOS arm64 或 Windows x64 发行包，校验 Node 官方 SHA-256，并捆绑 npm 11.19.0，用它安装当时的 `@deepseek-ai/dsh@latest`。macOS 构建会生成 DMG、`DSH Desktop.app.tar.gz` 更新包和对应的 `.sig` 签名，产物位于 `src-tauri/target/release/bundle/`。
+`prepare:runtime` 只检查轻量资源清单，不下载运行时。安装包只携带启动适配脚本；工作区里旧的 Node/DSH 资源缓存不会被打入应用。macOS 构建会生成 DMG、`DSH Desktop.app.tar.gz` 更新包和对应的 `.sig` 签名，产物位于 `src-tauri/target/release/bundle/`。
 
-Windows 安装包由 `.github/workflows/windows-build.yml` 在 GitHub 的 Windows runner 上原生构建。工作流会先验证源码资源中的运行时，再静默安装生成的 NSIS 包，并从真实安装目录启动一次捆绑 DSH；只有这两层冒烟测试都通过才保存 Actions artifact。
+Windows 安装包由 `.github/workflows/windows-build.yml` 在 GitHub 的 Windows runner 上原生构建。工作流验证轻量资源清单和测试后，静默安装生成的 NSIS 包，并在隔离数据目录中验证首次下载与缓存启动；通过后才保存 Actions artifact。
+
+本机验证命令：
+
+```sh
+npm test
+npm run build
+cargo test --manifest-path src-tauri/Cargo.toml
+npm run runtime:smoke -- --app "src-tauri/target/release/bundle/macos/DSH Desktop.app/Contents/MacOS/dsh-desktop" --download
+```
+
+最后一条命令在临时目录模拟没有 Node、pnpm 和 DSH 的电脑，验证首次准备与再次启动；省略 `--download` 则只验证启动检测不会下载任何工具。测试失败时保留临时目录并报告位置，成功后清理。测试不使用正式应用的数据目录。
 
 ## 发布新版本
 
@@ -106,7 +135,7 @@ gh run download <run-id> --name dsh-desktop-windows-x64 --dir dist-windows
 npm run release:publish -- --windows-installer "dist-windows/DSH Desktop_0.1.5_x64-setup.exe" "本次更新说明"
 ```
 
-该命令会在本机运行测试、强制刷新并准备 npm `latest` 的 dsh、ad-hoc 签名 macOS 应用，并用同一把更新私钥为 macOS 更新包和 Windows 安装包签名。随后它生成同时包含 `darwin-aarch64` 与 `windows-x86_64` 的 `latest.json`，推送 `main` 和版本标签，并通过已登录的 `gh` 创建 GitHub Release。私钥全程留在本机，不会交给 GitHub Actions。只想验证完整打包链路而不推送时使用：
+该命令会在本机运行测试、构建轻量应用、在临时目录验证实际首次下载与缓存启动、ad-hoc 签名 macOS 应用，并用同一把更新私钥为 macOS 更新包和 Windows 安装包签名。随后它生成同时包含 `darwin-aarch64` 与 `windows-x86_64` 的 `latest.json`，推送 `main` 和版本标签，并通过已登录的 `gh` 创建 GitHub Release。私钥全程留在本机，不会交给 GitHub Actions。只想验证完整打包链路而不推送时使用：
 
 ```sh
 npm run release:publish -- --dry-run --windows-installer "dist-windows/DSH Desktop_0.1.5_x64-setup.exe"

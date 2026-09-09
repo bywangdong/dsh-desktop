@@ -13,6 +13,25 @@
     "withGlobalTauri": true,
     "windows": [
       {
+        "label": "environment",
+        "create": false,
+        "url": "index.html?environment=1",
+        "title": "运行环境",
+        "width": 600,
+        "height": 480,
+        "minWidth": 520,
+        "minHeight": 420,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "skipTaskbar": true,
+        "center": true,
+        "visible": false,
+        "backgroundColor": "#191a1b",
+        "hiddenTitle": true,
+        "titleBarStyle": "Overlay"
+      },
+      {
         "label": "main",
         "title": "DSH Desktop",
         "width": 1280,
@@ -20,7 +39,7 @@
         "minWidth": 900,
         "minHeight": 620,
         "center": true,
-        "backgroundColor": "#0b0d12",
+        "backgroundColor": "#191a1b",
         "hiddenTitle": true,
         "titleBarStyle": "Overlay"
       },
@@ -70,10 +89,6 @@
     ],
     "createUpdaterArtifacts": true,
     "resources": {
-      "resources/node": "node",
-      "resources/npm": "npm",
-      "resources/bootstrap-runtime": "bootstrap-runtime",
-      "resources/runtime-manifest.json": "runtime-manifest.json",
       "resources/node-launcher.mjs": "node-launcher.mjs"
     },
     "icon": [

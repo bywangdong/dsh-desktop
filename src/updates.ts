@@ -171,11 +171,13 @@ function friendlyErrorDetail(detail: string | null): string {
 function render(info: VersionInfo): void {
   desktopVersion.textContent = info.desktopVersion;
   dshVersion.textContent = info.runtime.currentVersion;
-  dshChannel.textContent = info.runtime.updateChannel === "next" ? "Beta 通道" : "默认通道";
+  dshChannel.textContent = info.runtime.source === "local" ? "本机安装" : info.runtime.updateChannel === "next" ? "Beta 通道" : "默认通道";
   if (!channelChanging) dshBeta.checked = info.runtime.updateChannel === "next";
 
   const desktop = desktopPresentation(info.desktopUpdate);
-  const runtime = runtimePresentation(info.runtime.update);
+  const runtime = info.runtime.source === "local"
+    ? status("自行管理", "请通过原安装方式更新", "neutral", false, false, null)
+    : runtimePresentation(info.runtime.update);
   renderStatus(
     desktop,
     desktopStatus,
@@ -194,7 +196,7 @@ function render(info: VersionInfo): void {
   );
 
   checkAll.disabled = desktop.busy || runtime.busy;
-  dshBeta.disabled = runtime.busy || channelChanging;
+  dshBeta.disabled = info.runtime.source !== "managed" || runtime.busy || channelChanging;
   checkAll.textContent = checkAll.disabled
     ? "正在更新…"
     : info.desktopUpdate.phase === "available"

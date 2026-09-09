@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-inspect-runtime"
+description = "Enables the inspect_runtime command without any pre-configured scope."
+commands.allow = ["inspect_runtime"]
+
+[[permission]]
+identifier = "deny-inspect-runtime"
+description = "Denies the inspect_runtime command without any pre-configured scope."
+commands.deny = ["inspect_runtime"]

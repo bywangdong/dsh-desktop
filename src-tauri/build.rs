@@ -1,6 +1,12 @@
 fn main() {
     let app_manifest = tauri_build::AppManifest::new().commands(&[
         "bootstrap",
+        "inspect_runtime",
+        "prepare_runtime",
+        "get_setup_status",
+        "cancel_setup",
+        "pick_runtime_path",
+        "apply_runtime",
         "open_logs",
         "get_about_info",
         "check_dsh_update",

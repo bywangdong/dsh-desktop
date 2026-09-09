@@ -33,7 +33,7 @@ try {
 } catch {}
 
 const installed = state.active ? join(config.runtimesPath, state.active) : undefined;
-const candidates = [installed, config.bundledRuntime].filter(Boolean);
+const candidates = [installed, config.selectedRuntime].filter(Boolean);
 const runtime = candidates.find((candidate) =>
   existsSync(join(candidate, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js")),
 );
@@ -44,7 +44,7 @@ if (!runtime) {
 
 const cli = join(runtime, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
 const runtimeBin = join(runtime, "node_modules", ".bin");
-process.env.PATH = [dirname(process.execPath), runtimeBin, process.env.PATH]
+process.env.PATH = [...(config.pathEntries ?? []), dirname(process.execPath), runtimeBin, process.env.PATH]
   .filter(Boolean)
   .join(delimiter);
 process.argv[1] = cli;
@@ -56,7 +56,8 @@ await import(pathToFileURL(cli).href);
 struct LauncherConfig {
     state_path: PathBuf,
     runtimes_path: PathBuf,
-    bundled_runtime: PathBuf,
+    selected_runtime: PathBuf,
+    path_entries: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -81,26 +82,33 @@ pub struct TerminalCommandInstall {
 pub struct TerminalCommandManager {
     root: PathBuf,
     node: PathBuf,
-    bundled_runtime: PathBuf,
+    selected_runtime: PathBuf,
     runtimes: PathBuf,
     state: PathBuf,
+    path_entries: Vec<PathBuf>,
 }
 
 impl TerminalCommandManager {
     pub fn new(
         app_data_dir: &Path,
         node: PathBuf,
-        bundled_runtime: PathBuf,
+        selected_runtime: PathBuf,
         runtimes: PathBuf,
         state: PathBuf,
     ) -> Self {
         Self {
             root: app_data_dir.join("terminal"),
             node,
-            bundled_runtime,
+            selected_runtime,
             runtimes,
             state,
+            path_entries: Vec::new(),
         }
+    }
+
+    pub fn with_path_entries(mut self, entries: Vec<PathBuf>) -> Self {
+        self.path_entries = entries;
+        self
     }
 
     pub fn refresh_if_installed(&self) {
@@ -277,7 +285,8 @@ impl TerminalCommandManager {
         let config = LauncherConfig {
             state_path: self.state.clone(),
             runtimes_path: self.runtimes.clone(),
-            bundled_runtime: self.bundled_runtime.clone(),
+            selected_runtime: self.selected_runtime.clone(),
+            path_entries: self.path_entries.clone(),
         };
         fs::write(self.root.join(LAUNCHER_NAME), TERMINAL_LAUNCHER)
             .map_err(|error| format!("无法写入终端启动器：{error}"))?;
@@ -961,35 +970,32 @@ mod tests {
     }
 
     #[test]
-    fn terminal_launcher_runs_the_bundled_dsh() {
-        let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
-        let manifest: serde_json::Value = serde_json::from_reader(
-            fs::File::open(resources.join("runtime-manifest.json"))
-                .expect("open prepared runtime manifest"),
+    fn terminal_launcher_uses_selected_node_and_plugin_tool_paths() {
+        let node_output = Command::new("node")
+            .args(["-p", "process.execPath"])
+            .output()
+            .expect("build-host Node is required");
+        assert!(node_output.status.success());
+        let node = PathBuf::from(String::from_utf8_lossy(&node_output.stdout).trim());
+        let temp = tempfile::tempdir().expect("temporary launcher fixture");
+        let root = temp.path();
+        let selected = root.join("runtime/versions/1.2.3");
+        let cli = selected.join("node_modules/@deepseek-ai/dsh/lib/bin.js");
+        fs::create_dir_all(cli.parent().unwrap()).unwrap();
+        fs::write(
+            &cli,
+            "console.log(JSON.stringify({args:process.argv.slice(2),path:process.env.PATH}));\n",
         )
-        .expect("parse prepared runtime manifest");
-        let version = manifest["dshVersion"]
-            .as_str()
-            .expect("runtime manifest dsh version")
-            .to_string();
-        let node = resources.join(if cfg!(windows) {
-            "node/node.exe"
-        } else {
-            "node/bin/node"
-        });
-        let root = env::temp_dir().join(format!(
-            "dsh-desktop-terminal-launcher-test-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).expect("create terminal launcher test directory");
+        .unwrap();
+        let plugin_bin = root.join("plugin-tools/bin");
         let manager = TerminalCommandManager::new(
-            &root,
+            root,
             node.clone(),
-            resources.join("bootstrap-runtime"),
+            selected,
             root.join("runtime/versions"),
             root.join("runtime/state.json"),
-        );
+        )
+        .with_path_entries(vec![plugin_bin.clone()]);
         manager
             .write_launcher_assets()
             .expect("write terminal launcher assets");
@@ -1000,12 +1006,13 @@ mod tests {
             .current_dir(root.join("terminal"))
             .output()
             .expect("run terminal launcher");
-        let _ = fs::remove_dir_all(&root);
         assert!(
             output.status.success(),
             "terminal launcher failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), version);
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["args"][0], "--version");
+        assert!(env::split_paths(result["path"].as_str().unwrap()).any(|path| path == plugin_bin));
     }
 }

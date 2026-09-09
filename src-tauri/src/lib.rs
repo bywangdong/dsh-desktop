@@ -1,6 +1,9 @@
 mod app_updater;
 mod desktop_auth;
 mod runtime;
+mod runtime_download;
+mod runtime_environment;
+mod runtime_setup;
 mod terminal_command;
 #[cfg(target_os = "macos")]
 mod window_chrome;
@@ -8,7 +11,7 @@ mod window_chrome;
 use std::{env, sync::Arc, thread};
 
 use app_updater::AppUpdater;
-use runtime::RuntimeManager;
+use runtime_setup::{RuntimeService as RuntimeManager, SetupMode, SetupSnapshot};
 use serde::Serialize;
 use tauri::{
     menu::{MenuBuilder, SubmenuBuilder},
@@ -42,6 +45,69 @@ async fn bootstrap(
     state.runtime.schedule_update_check(app.clone());
     state.updater.schedule_update_check(app);
     Ok(result)
+}
+
+#[tauri::command]
+async fn inspect_runtime(
+    state: State<'_, AppState>,
+    mode: SetupMode,
+    path: Option<String>,
+) -> Result<SetupSnapshot, String> {
+    let manager = Arc::clone(&state.runtime);
+    tauri::async_runtime::spawn_blocking(move || manager.inspect(mode, path.as_deref()))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn prepare_runtime(
+    state: State<'_, AppState>,
+    mode: SetupMode,
+    path: Option<String>,
+) -> Result<SetupSnapshot, String> {
+    let manager = Arc::clone(&state.runtime);
+    tauri::async_runtime::spawn_blocking(move || manager.prepare(mode, path.as_deref()))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+fn get_setup_status(state: State<'_, AppState>) -> SetupSnapshot {
+    state.runtime.setup_snapshot()
+}
+
+#[tauri::command]
+fn cancel_setup(state: State<'_, AppState>) {
+    state.runtime.cancel_preparation();
+}
+
+#[tauri::command]
+async fn pick_runtime_path(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title("选择 DSH 可执行文件")
+            .blocking_pick_file()
+            .map(|file| {
+                file.into_path()
+                    .map(|path| path.to_string_lossy().to_string())
+                    .map_err(|error| error.to_string())
+            })
+            .transpose()
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn apply_runtime(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let manager = Arc::clone(&state.runtime);
+    tauri::async_runtime::spawn_blocking(move || manager.save_candidate())
+        .await
+        .map_err(|error| error.to_string())??;
+    state.updater.terminate();
+    state.runtime.terminate();
+    app.restart();
 }
 
 #[tauri::command]
@@ -109,6 +175,7 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
     let app_menu = SubmenuBuilder::new(app, "DSH Desktop")
         .text("about", "关于 DSH Desktop")
         .text("updates", "检查更新…")
+        .text("environment", "运行环境…")
         .separator()
         .text("restart", "重新启动")
         .separator()
@@ -231,16 +298,41 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let resource_dir = app.path().resource_dir()?;
-            let app_data_dir = app.path().app_data_dir()?;
+            let app_data_dir =
+                if cfg!(debug_assertions) || env::var_os("DSH_DESKTOP_RUNTIME_SMOKE").is_some() {
+                    env::var_os("DSH_DESKTOP_DATA_DIR")
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or(app.path().app_data_dir()?)
+                } else {
+                    app.path().app_data_dir()?
+                };
+            if !app_data_dir.is_absolute() {
+                return Err("application data directory must be absolute".into());
+            }
             let runtime = Arc::new(RuntimeManager::new(resource_dir, app_data_dir.clone())?);
-            if env::var_os("DSH_DESKTOP_RUNTIME_SMOKE").is_some() {
-                let info = runtime
-                    .smoke_bundled_runtime()
+            if let Ok(mode) = env::var("DSH_DESKTOP_RUNTIME_SMOKE") {
+                let inspected = runtime
+                    .inspect(SetupMode::Current, None)
                     .map_err(std::io::Error::other)?;
-                println!(
-                    "packaged runtime smoke passed: dsh {} at {}",
-                    info.dsh_version, info.url
-                );
+                if mode == "inspect" {
+                    println!("runtime inspection passed: ready={}", inspected.ready);
+                    std::process::exit(0);
+                }
+                match mode.as_str() {
+                    "prepare" => {
+                        runtime
+                            .prepare(SetupMode::Managed, None)
+                            .map_err(std::io::Error::other)?;
+                    }
+                    "cached" if inspected.ready => {}
+                    "cached" => return Err("cached runtime is not ready".into()),
+                    _ => return Err("unknown runtime smoke mode".into()),
+                }
+                let info = runtime.smoke_runtime().map_err(std::io::Error::other)?;
+                if mode == "prepare" {
+                    runtime.save_candidate().map_err(std::io::Error::other)?;
+                }
+                println!("packaged runtime smoke passed: dsh {}", info.dsh_version);
                 std::process::exit(0);
             }
             let updater = Arc::new(AppUpdater::new(app_data_dir)?);
@@ -268,6 +360,18 @@ pub fn run() {
                         eprintln!("failed to show Updates window: {error}");
                     }
                 }
+                "environment" => {
+                    if !state.runtime.has_started() {
+                        if let Some(main) = app.get_webview_window("main") {
+                            let _ = main.show();
+                            let _ = main.set_focus();
+                        }
+                        return;
+                    }
+                    if let Err(error) = show_configured_window(app, "environment") {
+                        eprintln!("failed to show runtime environment: {error}");
+                    }
+                }
                 "restart" => {
                     state.updater.terminate();
                     state.runtime.terminate();
@@ -286,7 +390,7 @@ pub fn run() {
             }
         })
         .on_window_event(|window, event| {
-            if matches!(window.label(), "about" | "updates") {
+            if matches!(window.label(), "about" | "updates" | "environment") {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
                     let _ = window.hide();
@@ -304,6 +408,12 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     let builder = builder.invoke_handler(tauri::generate_handler![
         bootstrap,
+        inspect_runtime,
+        prepare_runtime,
+        get_setup_status,
+        cancel_setup,
+        pick_runtime_path,
+        apply_runtime,
         open_logs,
         get_about_info,
         check_dsh_update,
@@ -314,6 +424,12 @@ pub fn run() {
     #[cfg(not(target_os = "macos"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         bootstrap,
+        inspect_runtime,
+        prepare_runtime,
+        get_setup_status,
+        cancel_setup,
+        pick_runtime_path,
+        apply_runtime,
         open_logs,
         get_about_info,
         check_dsh_update,

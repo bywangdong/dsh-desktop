@@ -1,107 +1,58 @@
 #!/usr/bin/env node
 
-import { spawn, spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { arch, platform, tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { access, mkdtemp, readdir, rm } from "node:fs/promises";
+import { platform, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const READY_PREFIX = "dsh web: http://127.0.0.1:";
-const TIMEOUT_MS = 30_000;
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const resources = process.env.DSH_DESKTOP_RESOURCES
-  ? resolve(process.env.DSH_DESKTOP_RESOURCES)
-  : join(root, "src-tauri", "resources");
-const manifest = JSON.parse(await readFile(join(resources, "runtime-manifest.json"), "utf8"));
-const hostPlatform = platform();
-const hostArch = arch();
+const args = process.argv.slice(2);
+let application;
+let download = false;
+for (let index = 0; index < args.length; index += 1) {
+  if (args[index] === "--app" && args[index + 1]) application = resolve(args[++index]);
+  else if (args[index] === "--download") download = true;
+  else throw new Error(`Unknown or incomplete argument: ${args[index]}`);
+}
+if (!application) throw new Error("Usage: npm run runtime:smoke -- --app <packaged executable> [--download]");
+await access(application);
+const data = await mkdtemp(join(tmpdir(), "dsh-desktop-smoke-"));
+const emptyPath = platform() === "win32"
+  ? join(process.env.SystemRoot ?? "C:\\Windows", "System32")
+  : "/usr/bin:/bin";
 
-if (manifest.platform !== hostPlatform || manifest.arch !== hostArch) {
-  throw new Error(
-    `Bundled runtime targets ${manifest.platform}-${manifest.arch}, not ${hostPlatform}-${hostArch}`,
-  );
+function run(mode) {
+  const result = spawnSync(application, [], {
+    cwd: root,
+    env: {
+      ...process.env,
+      DSH_DESKTOP_RUNTIME_SMOKE: mode,
+      DSH_DESKTOP_DATA_DIR: data,
+      DSH_DESKTOP_SMOKE_PATH: emptyPath,
+    },
+    stdio: "inherit",
+    timeout: mode === "prepare" ? 20 * 60_000 : 60_000,
+    windowsHide: true,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`Packaged runtime ${mode} failed (exit ${result.status})`);
 }
 
-const node = join(resources, "node", hostPlatform === "win32" ? "node.exe" : "bin/node");
-const cli = join(
-  resources,
-  "bootstrap-runtime",
-  "node_modules",
-  "@deepseek-ai",
-  "dsh",
-  "lib",
-  "bin.js",
-);
-const smokeHome = await mkdtemp(join(tmpdir(), "dsh-desktop-runtime-"));
-const child = spawn(node, [cli, "web", "--port", "0", "--no-open"], {
-  cwd: smokeHome,
-  detached: hostPlatform !== "win32",
-  env: {
-    ...process.env,
-    DSH_DESKTOP: "1",
-    DSH_HOME: smokeHome,
-    NODE_ENV: "production",
-  },
-  stdio: ["ignore", "pipe", "pipe"],
-  windowsHide: true,
-});
-
-let output = "";
-let settled = false;
-
-function terminate() {
-  if (child.exitCode !== null) return;
-  if (hostPlatform === "win32") {
-    spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-  } else {
-    try {
-      process.kill(-child.pid, "SIGTERM");
-    } catch {
-      child.kill("SIGTERM");
-    }
+try {
+  run("inspect");
+  if ((await readdir(join(data, "runtime"))).includes("toolchains")) {
+    throw new Error("Inspection unexpectedly created toolchains");
   }
-}
-
-function finish(error) {
-  if (settled) return;
-  settled = true;
-  terminate();
-  if (error) {
-    process.exitCode = 1;
-    process.stderr.write(`${error.message}\n${output}`);
+  if (download) {
+    run("prepare");
+    run("cached");
   }
+  process.stdout.write(download
+    ? "Packaged first-run download and cached launch passed.\n"
+    : "Packaged inspection passed without bundled tools or downloads.\n");
+} catch (error) {
+  process.stderr.write(`Smoke-test data retained for diagnosis: ${data}\n`);
+  throw error;
 }
-
-const timeout = setTimeout(() => {
-  finish(new Error(`dsh web did not become ready within ${TIMEOUT_MS}ms`));
-}, TIMEOUT_MS);
-
-child.stdout.setEncoding("utf8");
-child.stderr.setEncoding("utf8");
-child.stdout.on("data", (chunk) => {
-  output += chunk;
-  const readyLine = output.split(/\r?\n/u).find((line) => line.startsWith(READY_PREFIX));
-  if (!readyLine) return;
-  clearTimeout(timeout);
-  process.stdout.write(`${readyLine}\n`);
-  finish();
-});
-child.stderr.on("data", (chunk) => {
-  output += chunk;
-});
-child.on("error", (error) => {
-  clearTimeout(timeout);
-  finish(error);
-});
-child.on("exit", (code, signal) => {
-  if (settled) return;
-  clearTimeout(timeout);
-  finish(new Error(`dsh web exited before readiness (code ${code}, signal ${signal})`));
-});
-
-await new Promise((resolve) => child.once("close", resolve));
-await rm(smokeHome, { recursive: true, force: true });
-if (process.exitCode) process.exit(process.exitCode);
+await rm(data, { recursive: true, force: true });

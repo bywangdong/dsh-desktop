@@ -2,26 +2,52 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="stylesheet" href="/src/styles.css" />
+    <link rel="stylesheet" href="/src/startup.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0b0d12" />
+    <meta name="theme-color" content="#191a1b" />
     <title>DSH Desktop</title>
     <script type="module" src="/src/main.ts" defer></script>
   </head>
   <body>
-    <main class="launch-card" aria-live="polite">
-      <div class="mark" aria-hidden="true"><span>&gt;_</span></div>
-      <p class="eyebrow">DEEPSEEK HARNESS</p>
-      <h1>DSH Desktop</h1>
-      <div class="status-row">
-        <span class="spinner" id="spinner" aria-hidden="true"></span>
-        <p id="status">正在启动本机服务…</p>
-      </div>
-      <p class="hint" id="hint">直接使用已安装版本；更新检查不会阻塞启动。</p>
-      <pre id="error" hidden></pre>
-      <div class="actions" id="actions" hidden>
-        <button id="retry" type="button">重试</button>
-        <button id="logs" class="secondary" type="button">打开日志</button>
+    <main id="setup" class="setup" data-screen="checking">
+      <div class="setup-panel">
+        <header class="intro">
+          <img class="app-icon" src="/src-tauri/icons/128x128@2x.png" alt="" draggable="false" />
+          <h1 id="heading" tabindex="-1">正在打开 DSH…</h1>
+        </header>
+      <section class="content">
+        <div id="welcome-copy" class="welcome-copy" hidden>
+          <p>先准备好运行所需的组件。</p>
+          <p>只需完成一次，之后打开即可使用。</p>
+          <p id="welcome-hint" class="subtle" hidden></p>
+        </div>
+        <div id="flow" class="flow" aria-live="polite">
+          <div id="runtime-summary" class="runtime-summary" hidden>
+            <p id="runtime-label" class="field-label">当前安装</p>
+            <div class="runtime-identity"><p id="runtime-version"></p><span id="runtime-source" class="source-label"></span></div>
+          </div>
+          <p id="status">正在检查运行环境…</p>
+          <p id="hint" class="subtle" hidden></p>
+          <progress id="progress" aria-label="正在准备运行环境" hidden></progress>
+          <div id="local-result" class="local-result" hidden>
+            <p id="local-status"></p>
+            <p id="local-path" class="install-path"></p>
+          </div>
+          <div id="location-actions" hidden>
+            <button id="manual" type="button" class="text-action inline-action">手动指定位置…</button>
+            <button id="browse" type="button" class="text-action inline-action">浏览…</button>
+          </div>
+          <form id="path-form" hidden>
+            <label for="dsh-path">DSH 可执行文件的位置</label>
+            <div class="path-row"><input id="dsh-path" placeholder="粘贴 DSH 文件的完整路径" spellcheck="false" autocomplete="off" /><button type="submit" class="compact-button">检查</button></div>
+          </form>
+          <p id="error" class="error" role="alert" hidden></p>
+          <details id="details" hidden><summary id="details-label">查看详情</summary><div id="tool-details"></div><p class="subtle ownership-note">本机安装保持原位；下载的组件保存在应用的用户目录，不修改系统 PATH。</p></details>
+          <button id="logs" type="button" class="text-action inline-action" hidden>打开日志</button>
+        </div>
+        <button id="managed" type="button" class="text-action inline-action" hidden>改由应用下载</button>
+      </section>
+      <footer class="actions"><button id="secondary" type="button" class="text-action" disabled>使用已有安装…</button><button id="primary" type="button" class="primary-button" disabled>正在检查…</button></footer>
       </div>
     </main>
   </body>

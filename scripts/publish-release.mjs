@@ -51,7 +51,7 @@ const version = config.version;
 const tag = `v${version}`;
 const notes =
   notesArgument ??
-  "Signed in-app updates, non-blocking background checks, and the latest npm dsh runtime.";
+  "Lightweight desktop app with local-first runtime selection and on-demand setup.";
 
 if (platform() !== "darwin" || arch() !== "arm64") {
   throw new Error(`Releases must be built on Apple Silicon macOS, got ${platform()}-${arch()}`);
@@ -113,12 +113,15 @@ if (!dryRun) {
   }
 }
 
-run("npm", ["run", "prepare:runtime", "--", "--force"]);
-run("npm", ["run", "runtime:smoke"]);
+run("npm", ["test"]);
+run("npm", ["run", "prepare:runtime"]);
 run("cargo", ["test", "--manifest-path", "src-tauri/Cargo.toml"]);
 run("npm", ["run", "desktop:build"]);
 
 const bundleRoot = join(root, "src-tauri", "target", "release", "bundle");
+run("npm", ["run", "runtime:smoke", "--", "--app",
+  join(bundleRoot, "macos", `${config.productName}.app`, "Contents", "MacOS", "dsh-desktop"),
+  "--download"]);
 const dmgDirectory = join(bundleRoot, "dmg");
 const dmgCandidates = (await readdir(dmgDirectory)).filter(
   (name) => name.endsWith(".dmg") && name.includes(version),
@@ -232,16 +235,14 @@ await writeFile(
   `${checksumLines.join("\n")}\n`,
 );
 
-const runtimeManifest = JSON.parse(
-  await readFile(join(root, "src-tauri", "resources", "runtime-manifest.json"), "utf8"),
-);
 const releaseNotesPath = join(publishDirectory, "release-notes.md");
 await writeFile(
   releaseNotesPath,
   `${notes}\n\n` +
     `- Apple Silicon macOS\n` +
     (publishedWindowsInstaller ? `- x64 Windows 10/11\n` : "") +
-    `- Bundled \`@deepseek-ai/dsh@${runtimeManifest.dshVersion}\`\n` +
+    `- No bundled Node, npm, pnpm, or DSH; compatible local tools are reused\n` +
+    `- Missing tools download into application data after user confirmation\n` +
     `- macOS is ad-hoc signed and not notarized\n` +
     (publishedWindowsInstaller ? `- Windows is not Authenticode signed\n` : "") +
     `\nmacOS first installation may require:\n\n` +
