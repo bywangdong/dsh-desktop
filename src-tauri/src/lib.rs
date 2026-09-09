@@ -14,7 +14,7 @@ use app_updater::AppUpdater;
 use runtime_setup::{RuntimeService as RuntimeManager, SetupMode, SetupSnapshot};
 use serde::Serialize;
 use tauri::{
-    menu::{MenuBuilder, SubmenuBuilder},
+    menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     Manager, RunEvent, State,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
@@ -186,6 +186,12 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
         .separator()
         .quit()
         .build()?;
+    let new_session = MenuItemBuilder::with_id("new-session", "新建会话")
+        .accelerator("CmdOrCtrl+N")
+        .build(app)?;
+    let file_menu = SubmenuBuilder::new(app, "文件")
+        .item(&new_session)
+        .build()?;
     let edit_menu = SubmenuBuilder::new(app, "编辑")
         .undo()
         .redo()
@@ -200,10 +206,24 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
         .close_window()
         .build()?;
     let menu = MenuBuilder::new(app)
-        .items(&[&app_menu, &edit_menu, &window_menu])
+        .items(&[&app_menu, &file_menu, &edit_menu, &window_menu])
         .build()?;
     app.set_menu(menu)?;
     Ok(())
+}
+
+fn start_new_session(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let Some(window) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+    let url = window.url()?;
+    if url.scheme() != "http" || url.host_str() != Some("127.0.0.1") {
+        return Ok(());
+    }
+    window.unminimize()?;
+    window.show()?;
+    window.set_focus()?;
+    window.eval(include_str!("new_session.js"))
 }
 
 fn install_terminal_command(app: &tauri::AppHandle, runtime: Arc<RuntimeManager>) {
@@ -350,6 +370,13 @@ pub fn run() {
         .on_menu_event(|app, event| {
             let state = app.state::<AppState>();
             match event.id().as_ref() {
+                "new-session" => {
+                    if state.runtime.has_started() {
+                        if let Err(error) = start_new_session(app) {
+                            eprintln!("failed to start a new session: {error}");
+                        }
+                    }
+                }
                 "about" => {
                     if let Err(error) = show_configured_window(app, "about") {
                         eprintln!("failed to show About window: {error}");

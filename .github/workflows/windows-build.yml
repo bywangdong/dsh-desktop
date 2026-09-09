@@ -78,7 +78,7 @@ jobs:
             throw "Windows installer failed with exit code $($install.ExitCode)"
           }
 
-          $application = Get-ChildItem $installDir -Filter "DSH Desktop.exe" -Recurse |
+          $application = Get-ChildItem $installDir -Filter "dsh-desktop.exe" -Recurse |
             Select-Object -First 1
           if (-not $application) {
             throw "Installed DSH Desktop executable was not found"
