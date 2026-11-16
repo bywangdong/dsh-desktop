@@ -57,7 +57,7 @@ function DownloadButton({ href, children, primary = false }) {
     <ExternalLink
       className={`button ${primary ? "button-primary" : "button-secondary"}`}
       href={href}
-      label="下载 DSH Desktop macOS Apple Silicon 版"
+      label="查看 DSH Desktop 历史版本"
     >
       <AppleLogo aria-hidden="true" size={22} weight="fill" />
       <span>{children}</span>
@@ -86,27 +86,27 @@ export function App() {
 
       <main>
         <section className="hero" aria-labelledby="hero-title">
-          <p className="preview-badge">Developer Preview</p>
+          <p className="preview-badge">已废弃 · Deprecated</p>
           <h1 id="hero-title">
             让 DeepSeek Harness
             <span>像普通应用一样打开</span>
           </h1>
           <p className="hero-copy">
-            极简、轻量，让 DSH 成为随手可用的桌面应用。
+            DSH Desktop 已停止维护，不再发布新版本。
             <br />
-            不 Fork、不修改 DSH 代码，跟随 npm 发版，及时用上最新版。
+            请使用 <ExternalLink href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness 官方桌面应用</ExternalLink>。
           </p>
 
-          <div className="hero-actions" aria-label="下载 DSH Desktop">
-            <DownloadButton href={links.mac} primary>
-              下载 macOS 版
+          <div className="hero-actions" aria-label="DSH Desktop 历史版本">
+            <DownloadButton href={links.releases} primary>
+              查看历史版本
             </DownloadButton>
             <ExternalLink className="github-link" href={links.github}>
               查看 GitHub
               <ArrowSquareOut aria-hidden="true" size={16} />
             </ExternalLink>
           </div>
-          <p className="release-meta">v0.1.12 · Apple Silicon · macOS 预览版</p>
+          <p className="release-meta">已于 2026-11-16 废弃 · 历史版本仅供存档</p>
 
         </section>
 
@@ -134,12 +134,12 @@ export function App() {
           ))}
         </section>
 
-        <aside className="preview-notice" aria-label="开发者预览版说明">
+        <aside className="preview-notice" aria-label="项目废弃说明">
           <Warning aria-hidden="true" size={43} weight="regular" />
           <div>
-            <h2>开发者预览版</h2>
+            <h2>项目已废弃</h2>
             <p>
-              面向技术用户的预览构建。当前版本尚未进行 Apple Notarization。
+              本项目停止维护。本页界面与功能介绍仅作历史记录，旧安装包不再提供更新。
             </p>
           </div>
         </aside>
@@ -151,7 +151,7 @@ export function App() {
             <img src={assets.icon} alt="" />
             <div>
               <strong>DSH Desktop</strong>
-              <p>极简轻量、紧跟上游的 DeepSeek Harness 桌面入口。</p>
+              <p>已停止维护的 DeepSeek Harness 桌面外壳。</p>
             </div>
           </div>
 

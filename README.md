@@ -1,4 +1,6 @@
-# DSH Desktop
+# DSH Desktop（已废弃）
+
+> **已废弃 / Deprecated（2026-11-16）**：本项目停止维护，不再发布新版本。请使用 [DeepSeek Harness 官方项目](https://github.com/deepseek-ai/deepseek-harness) 提供的桌面应用。以下文档与历史安装包仅供存档查阅。
 
 DSH Desktop 是一个独立、轻量的 macOS 与 Windows 外壳，让 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 可以像普通应用一样打开。macOS 使用沉浸式窗口，不保留单独的标题栏占位，原生窗口按钮仅在鼠标移入左上角时显示；外壳不修改、复制或 fork 来源仓库的代码，运行内容始终来自 npm 官方包 `@deepseek-ai/dsh`。
 
