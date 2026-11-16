@@ -8,7 +8,7 @@ macOS 窗口顶部的非交互区域可以拖动，按钮、标签页和输入�
 
 “文件 → 新建会话”支持 macOS `⌘N` / Windows `Ctrl+N`，与侧边栏的新建按钮使用同一流程，在主窗口中沿用当前工作区，不另开窗口。已有空白会话会由 DSH 复用；快捷键也适用于输入框有焦点或侧边栏收起时，不直接清空草稿或改写历史。
 
-产品介绍与下载：[DSH Desktop 官网](https://iobee.github.io/dsh-desktop/)
+产品介绍与下载：[DSH Desktop 官网](https://bywangdong.github.io/dsh-desktop/)
 
 ## 使用方式
 

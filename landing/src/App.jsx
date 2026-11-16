@@ -8,10 +8,10 @@ import {
 } from "@phosphor-icons/react";
 
 const links = {
-  github: "https://github.com/iobee/dsh-desktop",
-  docs: "https://github.com/iobee/dsh-desktop#使用方式",
-  releases: "https://github.com/iobee/dsh-desktop/releases",
-  mac: "https://github.com/iobee/dsh-desktop/releases/download/v0.1.12/DSH.Desktop_0.1.12_aarch64.dmg",
+  github: "https://github.com/bywangdong/dsh-desktop",
+  docs: "https://github.com/bywangdong/dsh-desktop#使用方式",
+  releases: "https://github.com/bywangdong/dsh-desktop/releases",
+  mac: "https://github.com/bywangdong/dsh-desktop/releases/download/v0.1.12/DSH.Desktop_0.1.12_aarch64.dmg",
 };
 
 const assets = {

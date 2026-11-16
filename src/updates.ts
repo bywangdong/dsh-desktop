@@ -352,7 +352,7 @@ if (!tauriRuntime) {
       phase: "error",
       targetVersion: null,
       progress: null,
-      detail: "GitHub 更新检查失败：error sending request for url (https://github.com/iobee/dsh-desktop/releases/latest/download/latest.json)",
+      detail: "GitHub 更新检查失败：error sending request for url (https://github.com/bywangdong/dsh-desktop/releases/latest/download/latest.json)",
     };
     previewInfo.runtime.update = {
       phase: "installing",

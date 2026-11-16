@@ -17,7 +17,7 @@ import { arch, homedir, platform } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const repository = "iobee/dsh-desktop";
+const repository = "bywangdong/dsh-desktop";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const arguments_ = process.argv.slice(2);
 let dryRun = false;

@@ -17,6 +17,6 @@ When implementing from a selected generated mock, treat that image as the source
 - Present DSH inside the desktop window without a second system-browser window; older runtimes that do not support browser suppression use the compatibility launch path.
 - Lead product messaging with three promises: the shell is minimal and lightweight, it neither forks nor modifies DSH code, and it follows upstream npm releases through `latest` or the optional `next` channel. Distinguish immediate manual checks from the 12-hour automatic cadence instead of promising instantaneous background updates.
 
-The canonical public deployment is GitHub Pages at `https://iobee.github.io/dsh-desktop/`. Keep public asset URLs compatible with both the Pages subpath and local root previews through Vite's `BASE_URL`.
+The canonical public deployment is GitHub Pages at `https://bywangdong.github.io/dsh-desktop/`. Keep public asset URLs compatible with both the Pages subpath and local root previews through Vite's `BASE_URL`.
 
 Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts/prepare-sites-build.mjs`, and `tests/sites-worker.test.mjs` intact so the same local prototype can be handed to Sites. Before a Sites handoff, run `npm run build` and `npm run test:sites`; the build must leave `dist/client/index.html`, `dist/server/index.js`, and `dist/.openai/hosting.json`.
